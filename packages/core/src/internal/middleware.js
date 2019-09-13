@@ -4,37 +4,53 @@ import { stdChannel } from './channel'
 import { runSaga } from './runSaga'
 
 export default function sagaMiddlewareFactory({ context = {}, channel = stdChannel(), sagaMonitor, ...options } = {}) {
-  let boundRunSaga
+  let _dispatch
+  let _getState
 
   if (process.env.NODE_ENV !== 'production') {
     check(channel, is.channel, 'options.channel passed to the Saga middleware is not a channel')
   }
+  const createWrappedDispatch = (baseDispatch, props, { namespaceKeyGenerator } = {}) => {
+    return namespaceKeyGenerator
+      ? action => {
+          const _action = {
+            ...action,
+            meta: {
+              ...(action.meta || {}),
+              namespaceKey: namespaceKeyGenerator(props),
+            },
+          }
+          baseDispatch(_action)
+        }
+      : baseDispatch
+  }
 
   function sagaMiddleware({ getState, dispatch }) {
-    boundRunSaga = runSaga.bind(null, {
-      ...options,
-      context,
-      channel,
-      dispatch,
-      getState,
-      sagaMonitor,
-    })
-
+    _dispatch = dispatch
+    _getState = getState
     return next => action => {
       if (sagaMonitor && sagaMonitor.actionDispatched) {
         sagaMonitor.actionDispatched(action)
       }
-      const result = next(action) // hit reducers
+      const result = next(action)
       channel.put(action)
       return result
     }
   }
 
-  sagaMiddleware.run = (...args) => {
-    if (process.env.NODE_ENV !== 'production' && !boundRunSaga) {
-      throw new Error('Before running a Saga, you must mount the Saga middleware on the Store using applyMiddleware')
-    }
-    return boundRunSaga(...args)
+  sagaMiddleware.run = (saga, props = {}, params) => {
+    return runSaga(
+      {
+        ...options,
+        context,
+        channel,
+        dispatch: createWrappedDispatch(_dispatch, props, params),
+        getState: _getState,
+        sagaMonitor,
+      },
+      saga,
+      props,
+    )
   }
 
   sagaMiddleware.setContext = props => {
